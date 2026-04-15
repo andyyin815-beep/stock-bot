@@ -1,22 +1,26 @@
 import requests
 import time
 
-# ===== ⚠️ 只改這兩行 =====
-TOKEN = "ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU="
-USER_ID = "Ue4ac469ed010e1cebba684c8cb399ae5"
+# ===== ⚠️ 改這兩個 =====
+TOKEN = "你的LINE_CHANNEL_ACCESS_TOKEN"
+USER_ID = "你的USER_ID"
 
-# ===== LINE發送 =====
+
+# ===== LINE =====
 def send_line(msg):
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Authorization": f"Bearer {TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "to": USER_ID,
-        "messages": [{"type": "text", "text": msg}]
-    }
-    requests.post(url, headers=headers, json=data)
+    try:
+        url = "https://api.line.me/v2/bot/message/push"
+        headers = {
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "to": USER_ID,
+            "messages": [{"type": "text", "text": msg}]
+        }
+        requests.post(url, headers=headers, json=data)
+    except:
+        print("LINE 發送失敗")
 
 
 # ===== RSI =====
@@ -42,11 +46,14 @@ def calculate_rsi(data, period=14):
     return 100 - (100 / (1 + rs))
 
 
-# ===== 大盤濾網 =====
+# ===== 大盤 =====
 def market_ok():
     try:
         url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=TAIEX"
         data = requests.get(url).json()["data"]
+
+        if len(data) < 20:
+            return False
 
         close = data[-1]["close"]
         ma20 = sum(d["close"] for d in data[-20:]) / 20
@@ -58,9 +65,12 @@ def market_ok():
 
 # ===== 股票清單 =====
 def get_all_stocks():
-    url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo"
-    data = requests.get(url).json()["data"]
-    return [d["stock_id"] for d in data][:200]
+    try:
+        url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo"
+        data = requests.get(url).json()["data"]
+        return [d["stock_id"] for d in data][:200]
+    except:
+        return []
 
 
 # ===== 價格 =====
@@ -131,15 +141,23 @@ def is_hot(price, inst):
 def scan():
     print("🚀 掃描中...")
 
+    # 👉 啟動測試（只會送一次）
+    send_line("✅ 系統啟動成功")
+
     if not market_ok():
-        print("⚠️ 大盤弱，不進場")
+        msg = "⚠️ 大盤偏弱，今日建議觀望"
+        print(msg)
+        send_line(msg)
         return
+
+    found = False
 
     for s in get_all_stocks():
         price = get_price(s)
         inst = get_inst(s)
 
         if is_hot(price, inst):
+            found = True
             today = price[-1]
 
             msg = f"""🔥 主力法人股：{s}
@@ -148,9 +166,11 @@ def scan():
 🛑 停損：{today["min"]}
 🎯 策略：突破買
 """
-
             print(msg)
             send_line(msg)
+
+    if not found:
+        print("❌ 今日無符合條件股票")
 
 
 # ===== 主程式 =====
