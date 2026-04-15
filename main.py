@@ -1,23 +1,33 @@
 import requests
 import time
 
-TOKEN = "你的TOKEN"
-USER_ID = "你的USER_ID"
+# ====== 你的設定 ======
+TOKEN = "ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU=".strip()
+USER_ID = "Ue4ac469ed010e1cebba684c8cb399ae5".strip()
 
-
+# ====== LINE推播 ======
 def send_line(msg):
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Authorization": f"Bearer {TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "to": USER_ID,
-        "messages": [{"type": "text", "text": msg}]
-    }
-    requests.post(url, headers=headers, json=data)
+    try:
+        url = "https://api.line.me/v2/bot/message/push"
+
+        headers = {
+            "Authorization": "Bearer " + TOKEN,
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "to": USER_ID,
+            "messages": [{"type": "text", "text": msg}]
+        }
+
+        r = requests.post(url, headers=headers, json=data, timeout=10)
+        print("LINE:", r.status_code)
+
+    except Exception as e:
+        print("LINE錯誤:", e)
 
 
+# ====== RSI ======
 def calculate_rsi(data, period=14):
     gains, losses = [], []
 
@@ -40,10 +50,15 @@ def calculate_rsi(data, period=14):
     return 100 - (100 / (1 + rs))
 
 
+# ====== 大盤判斷 ======
 def market_ok():
     try:
         url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=TAIEX"
-        data = requests.get(url).json()["data"]
+        res = requests.get(url, timeout=10).json()
+        data = res.get("data", [])
+
+        if len(data) < 20:
+            return False
 
         close = data[-1]["close"]
         ma20 = sum(d["close"] for d in data[-20:]) / 20
@@ -53,25 +68,36 @@ def market_ok():
         return False
 
 
+# ====== 股票清單 ======
 def get_all_stocks():
-    data = requests.get("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo").json()["data"]
-    return [d["stock_id"] for d in data][:200]
-
-
-def get_price(s):
     try:
-        return requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={s}").json()["data"]
+        url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo"
+        res = requests.get(url, timeout=10).json()
+        data = res.get("data", [])
+        return [d["stock_id"] for d in data][:200]  # 控制數量避免爆掉
     except:
         return []
 
 
-def get_inst(s):
+# ====== 股價 ======
+def get_price(stock_id):
     try:
-        return requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={s}").json()["data"]
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}"
+        return requests.get(url, timeout=10).json().get("data", [])
     except:
         return []
 
 
+# ====== 三大法人 ======
+def get_inst(stock_id):
+    try:
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}"
+        return requests.get(url, timeout=10).json().get("data", [])
+    except:
+        return []
+
+
+# ====== 選股邏輯 ======
 def is_hot(price, inst):
     if len(price) < 30 or len(inst) < 10:
         return False
@@ -84,6 +110,7 @@ def is_hot(price, inst):
     open_p = t["open"]
     vol = t["Trading_Volume"]
 
+    # 🔥 基本條件
     if vol < 2000:
         return False
 
@@ -95,7 +122,9 @@ def is_hot(price, inst):
 
     rsi = calculate_rsi(price)
 
+    # 🔥 三大法人
     last3 = inst[-3:]
+
     foreign = sum(d["buy_sell"] for d in last3 if d["name"] == "Foreign_Investor")
     trust = sum(d["buy_sell"] for d in last3 if d["name"] == "Investment_Trust")
     dealer = sum(d["buy_sell"] for d in last3 if d["name"] == "Dealer")
@@ -104,17 +133,18 @@ def is_hot(price, inst):
     strong = close >= high * 0.9
 
     return (
-        vol > vol5 * 2 and
-        close >= high20 and
-        ma5 > ma10 > ma20 and
-        close > open_p and
-        rsi > 60 and
-        change > 3 and
-        strong and
-        foreign > 0 and trust > 0 and dealer > 0
+        vol > vol5 * 2 and            # 爆量
+        close >= high20 and          # 突破
+        ma5 > ma10 > ma20 and        # 多頭
+        close > open_p and           # 紅K
+        rsi > 60 and                 # 強勢
+        change > 3 and               # 漲幅
+        strong and                   # 收高
+        foreign > 0 and trust > 0 and dealer > 0  # 三大法人買
     )
 
 
+# ====== 掃描 ======
 def scan():
     print("🚀 掃描中...")
 
@@ -124,29 +154,38 @@ def scan():
         send_line(msg)
         return
 
+    stocks = get_all_stocks()
+
     found = False
 
-    for s in get_all_stocks():
-        price = get_price(s)
-        inst = get_inst(s)
+    for s in stocks:
+        try:
+            price = get_price(s)
+            inst = get_inst(s)
 
-        if is_hot(price, inst):
-            found = True
-            t = price[-1]
+            if is_hot(price, inst):
+                found = True
+                t = price[-1]
 
-            msg = f"""🔥 主力法人股：{s}
+                msg = f"""🔥 主力飆股：{s}
 
 📈 買點：突破 {t["max"]}
 🛑 停損：{t["min"]}
-🎯 策略：突破買
+💰 現價：{t["close"]}
+
+策略：爆量＋法人＋突破
 """
-            print(msg)
-            send_line(msg)
+                print(msg)
+                send_line(msg)
+
+        except Exception as e:
+            print("單檔錯誤:", s, e)
 
     if not found:
         print("❌ 今日無訊號")
 
 
+# ====== 主程式 ======
 while True:
     scan()
-    time.sleep(600)
+    time.sleep(600)  # 每10分鐘掃一次
