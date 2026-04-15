@@ -3,42 +3,26 @@ import time
 
 stock_id = "2330"
 
-def get_from_yahoo():
-    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={stock_id}.TW"
-    try:
-        res = requests.get(url, timeout=10)
-        data = res.json()
-        result = data.get("quoteResponse", {}).get("result", [])
-        if result:
-            return result[0].get("regularMarketPrice")
-    except:
-        return None
-
-def get_from_twse():
-    url = f"http://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
-    try:
-        res = requests.get(url, timeout=10)
-        data = res.json()
-        if data.get("msgArray"):
-            return data["msgArray"][0].get("z")
-    except:
-        return None
-
 def get_stock_price():
-    price = get_from_yahoo()
+    url = f"https://api.allorigins.win/raw?url=https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
 
-    if price:
-        print(f"[Yahoo] 目前價格: {price}")
-        return
+    try:
+        res = requests.get(url, timeout=10)
 
-    print("Yahoo 失敗，改用台股 API...")
+        if res.status_code != 200 or not res.text:
+            print("API 沒回資料")
+            return
 
-    price = get_from_twse()
+        data = res.json()
 
-    if price:
-        print(f"[TWSE] 目前價格: {price}")
-    else:
-        print("全部 API 都失敗")
+        if data.get("msgArray"):
+            price = data["msgArray"][0].get("z", "無成交")
+            print(f"目前價格: {price}")
+        else:
+            print("抓不到資料")
+
+    except Exception as e:
+        print("錯誤:", e)
 
 
 while True:
