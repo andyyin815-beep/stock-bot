@@ -4,19 +4,14 @@ import time
 stock_id = "2330"
 
 def get_stock_price():
-    url = f"https://api.allorigins.win/raw?url=https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
+    url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date=2024-04-01"
 
     try:
         res = requests.get(url, timeout=10)
-
-        if res.status_code != 200 or not res.text:
-            print("API 沒回資料")
-            return
-
         data = res.json()
 
-        if data.get("msgArray"):
-            price = data["msgArray"][0].get("z", "無成交")
+        if data["data"]:
+            price = data["data"][-1]["close"]
             print(f"目前價格: {price}")
         else:
             print("抓不到資料")
