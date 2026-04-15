@@ -1,17 +1,41 @@
 import requests
 import time
 
-# 取得台股清單（上市）
+# ===== RSI 計算 =====
+def calculate_rsi(data, period=14):
+    gains = []
+    losses = []
+
+    for i in range(1, len(data)):
+        change = data[i]["close"] - data[i-1]["close"]
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+
+    if avg_loss == 0:
+        return 100
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+# ===== 取得股票清單 =====
 def get_all_stocks():
     url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo"
     res = requests.get(url)
     data = res.json()["data"]
 
-    # 只留上市股票
     stocks = [d["stock_id"] for d in data if d["industry_category"]]
-    return stocks[:200]  # ⚠️ 先限制200檔避免爆API（可之後放大）
+    return stocks[:300]  # 可調整
 
 
+# ===== 取得價格 =====
 def get_stock_data(stock_id):
     url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date=2024-03-01"
     try:
@@ -21,20 +45,22 @@ def get_stock_data(stock_id):
         return []
 
 
+# ===== 主力選股邏輯 =====
 def is_hot_stock(data):
-    if len(data) < 20:
+    if len(data) < 30:
         return False
 
-    # 最新
     today = data[-1]
+
     close = today["close"]
+    open_price = today["open"]
     volume = today["Trading_Volume"]
 
-    # 過濾太小成交量（避免垃圾股）
-    if volume < 1000:
+    # 過濾冷門股
+    if volume < 2000:
         return False
 
-    # 5日均量
+    # 均量
     vol5 = sum(d["Trading_Volume"] for d in data[-5:]) / 5
 
     # 均線
@@ -42,39 +68,45 @@ def is_hot_stock(data):
     ma10 = sum(d["close"] for d in data[-10:]) / 10
     ma20 = sum(d["close"] for d in data[-20:]) / 20
 
-    # 20日最高
+    # 高點
     high20 = max(d["close"] for d in data[-20:])
 
-    # 條件
-    cond1 = volume > vol5 * 2            # 爆量
-    cond2 = close >= high20              # 突破
-    cond3 = ma5 > ma10 > ma20            # 多頭排列
-    cond4 = close > data[-2]["close"]    # 當日上漲
+    # RSI
+    rsi = calculate_rsi(data)
 
-    return cond1 and cond2 and cond3 and cond4
+    # ===== 條件 =====
+    cond1 = volume > vol5 * 2          # 爆量
+    cond2 = close >= high20            # 突破
+    cond3 = ma5 > ma10 > ma20          # 多頭
+    cond4 = close > open_price         # 紅K
+    cond5 = rsi > 60                   # 動能
+
+    return cond1 and cond2 and cond3 and cond4 and cond5
 
 
+# ===== 掃描 =====
 def scan_market():
-    print("開始掃描市場...")
+    print("🚀 主力掃描開始...")
 
     stocks = get_all_stocks()
     hot = []
 
     for stock in stocks:
         data = get_stock_data(stock)
+
         if is_hot_stock(data):
             hot.append(stock)
-            print(f"🔥 發現飆股：{stock}")
+            print(f"🔥 主力進場：{stock}")
 
     if not hot:
-        print("今天沒有符合條件的股票")
+        print("❌ 今天沒有主力股")
     else:
-        print("==== 今日飆股清單 ====")
+        print("==== 🎯 主力飆股 ====")
         for s in hot:
             print(s)
 
 
-# 每10分鐘掃一次（避免API爆）
+# ===== 執行 =====
 while True:
     scan_market()
     time.sleep(600)
