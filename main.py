@@ -1,18 +1,36 @@
 import requests
 import time
 
+# ===== ⚠️ 只改這兩行 =====
+TOKEN = "ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU="
+USER_ID = "Ue4ac469ed010e1cebba684c8cb399ae5"
+
+# ===== LINE發送 =====
+def send_line(msg):
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "to": USER_ID,
+        "messages": [{"type": "text", "text": msg}]
+    }
+    requests.post(url, headers=headers, json=data)
+
+
 # ===== RSI =====
 def calculate_rsi(data, period=14):
     gains, losses = [], []
 
     for i in range(1, len(data)):
-        change = data[i]["close"] - data[i-1]["close"]
-        if change > 0:
-            gains.append(change)
+        diff = data[i]["close"] - data[i-1]["close"]
+        if diff > 0:
+            gains.append(diff)
             losses.append(0)
         else:
             gains.append(0)
-            losses.append(abs(change))
+            losses.append(abs(diff))
 
     avg_gain = sum(gains[-period:]) / period
     avg_loss = sum(losses[-period:]) / period
@@ -26,11 +44,9 @@ def calculate_rsi(data, period=14):
 
 # ===== 大盤濾網 =====
 def market_ok():
-    url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=TAIEX&start_date=2024-03-01"
     try:
+        url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=TAIEX"
         data = requests.get(url).json()["data"]
-        if len(data) < 20:
-            return False
 
         close = data[-1]["close"]
         ma20 = sum(d["close"] for d in data[-20:]) / 20
@@ -43,32 +59,29 @@ def market_ok():
 # ===== 股票清單 =====
 def get_all_stocks():
     url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo"
-    res = requests.get(url)
-    data = res.json()["data"]
-
-    stocks = [d["stock_id"] for d in data if d["industry_category"]]
-    return stocks[:300]   # ⚠️ 可調整（免費API限制）
+    data = requests.get(url).json()["data"]
+    return [d["stock_id"] for d in data][:200]
 
 
-# ===== 價格資料 =====
+# ===== 價格 =====
 def get_price(stock_id):
-    url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}&start_date=2024-03-01"
     try:
-        return requests.get(url, timeout=10).json()["data"]
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id={stock_id}"
+        return requests.get(url).json()["data"]
     except:
         return []
 
 
-# ===== 法人資料 =====
-def get_institution(stock_id):
-    url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}&start_date=2024-03-01"
+# ===== 法人 =====
+def get_inst(stock_id):
     try:
-        return requests.get(url, timeout=10).json()["data"]
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={stock_id}"
+        return requests.get(url).json()["data"]
     except:
         return []
 
 
-# ===== 高勝率主力判斷 =====
+# ===== 核心策略 =====
 def is_hot(price, inst):
     if len(price) < 30 or len(inst) < 10:
         return False
@@ -76,15 +89,14 @@ def is_hot(price, inst):
     today = price[-1]
 
     close = today["close"]
-    open_price = today["open"]
     high = today["max"]
+    low = today["min"]
+    open_p = today["open"]
     volume = today["Trading_Volume"]
 
-    # 過濾垃圾股
     if volume < 2000:
         return False
 
-    # ===== 技術面 =====
     vol5 = sum(d["Trading_Volume"] for d in price[-5:]) / 5
     ma5 = sum(d["close"] for d in price[-5:]) / 5
     ma10 = sum(d["close"] for d in price[-10:]) / 10
@@ -93,56 +105,52 @@ def is_hot(price, inst):
 
     rsi = calculate_rsi(price)
 
-    # ===== 三大法人 =====
     last3 = inst[-3:]
-
     foreign = sum(d["buy_sell"] for d in last3 if d["name"] == "Foreign_Investor")
     trust = sum(d["buy_sell"] for d in last3 if d["name"] == "Investment_Trust")
     dealer = sum(d["buy_sell"] for d in last3 if d["name"] == "Dealer")
 
     cond_inst = foreign > 0 and trust > 0 and dealer > 0
 
-    # ===== 強度 =====
-    change_pct = (close - price[-2]["close"]) / price[-2]["close"] * 100
-    strong_close = close >= high * 0.9
+    change = (close - price[-2]["close"]) / price[-2]["close"] * 100
+    strong = close >= high * 0.9
 
-    # ===== 條件 =====
-    cond1 = volume > vol5 * 2
-    cond2 = close >= high20
-    cond3 = ma5 > ma10 > ma20
-    cond4 = close > open_price
-    cond5 = rsi > 60
-    cond6 = change_pct > 3
-    cond7 = strong_close
-
-    return cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond_inst
+    return (
+        volume > vol5 * 2 and
+        close >= high20 and
+        ma5 > ma10 > ma20 and
+        close > open_p and
+        rsi > 60 and
+        change > 3 and
+        strong and
+        cond_inst
+    )
 
 
 # ===== 掃描 =====
 def scan():
-    print("🚀 高勝率掃描中...")
+    print("🚀 掃描中...")
 
     if not market_ok():
-        print("⚠️ 大盤偏弱，今天不建議進場")
+        print("⚠️ 大盤弱，不進場")
         return
 
-    stocks = get_all_stocks()
-    result = []
-
-    for s in stocks:
+    for s in get_all_stocks():
         price = get_price(s)
-        inst = get_institution(s)
+        inst = get_inst(s)
 
         if is_hot(price, inst):
-            result.append(s)
-            print(f"🔥 主力法人股：{s}")
+            today = price[-1]
 
-    if not result:
-        print("❌ 今日無符合條件股票")
-    else:
-        print("==== 🎯 今日強勢股 ====")
-        for r in result:
-            print(r)
+            msg = f"""🔥 主力法人股：{s}
+
+📈 買點：突破 {today["max"]}
+🛑 停損：{today["min"]}
+🎯 策略：突破買
+"""
+
+            print(msg)
+            send_line(msg)
 
 
 # ===== 主程式 =====
