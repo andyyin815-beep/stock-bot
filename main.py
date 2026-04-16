@@ -19,7 +19,7 @@ def send_line(msg):
         "Content-Type": "application/json"
     }
     payload = {
-        "to": USER_ID,
+        "to": Ue4ac469ed010e1cebba684c8cb399ae5,
         "messages": [{"type": "text", "text": msg}]
     }
     try:
