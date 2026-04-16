@@ -1,13 +1,15 @@
 import requests
 import time
+from datetime import datetime
 
-TOKEN = "ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU=".strip()
-USER_ID = "Ue4ac469ed010e1cebba684c8cb399ae5".strip()
+TOKEN = "你的TOKEN".strip()
+USER_ID = "你的USER_ID".strip()
 
-# ====== 防重複通知 ======
 notified = set()
+last_report_date = ""
 
 
+# ===== LINE =====
 def send_line(msg):
     try:
         url = "https://api.line.me/v2/bot/message/push"
@@ -41,20 +43,29 @@ def rsi(data, period=14):
     return 100 - (100 / (1 + rs))
 
 
-# ===== 大盤過濾 =====
-def market_ok():
+# ===== 大盤 =====
+def get_market():
     try:
         url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=TAIEX"
         data = requests.get(url).json()["data"]
 
         close = data[-1]["close"]
+        prev = data[-2]["close"]
         ma20 = sum(d["close"] for d in data[-20:]) / 20
 
-        return close > ma20
+        change = (close - prev) / prev * 100
+
+        return close, ma20, change
     except:
-        return False
+        return 0, 0, 0
 
 
+def market_ok():
+    close, ma20, _ = get_market()
+    return close > ma20
+
+
+# ===== 股票 =====
 def get_stocks():
     data = requests.get("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo").json()["data"]
     return [d["stock_id"] for d in data][:150]
@@ -68,74 +79,63 @@ def get_inst(s):
     return requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={s}").json().get("data", [])
 
 
-# ===== 核心策略（升級版） =====
-def is_strong(price, inst):
-
+# ===== 多頭策略 =====
+def strong_stock(price, inst):
     if len(price) < 30 or len(inst) < 10:
         return False
 
     t = price[-1]
-
     close = t["close"]
-    high = t["max"]
-    low = t["min"]
-    open_p = t["open"]
+    high20 = max(d["close"] for d in price[-20:])
     vol = t["Trading_Volume"]
+    vol5 = sum(d["Trading_Volume"] for d in price[-5:]) / 5
 
-    # 🚫 避免太小量
-    if vol < 3000:
-        return False
-
-    # 📊 均線
     ma5 = sum(d["close"] for d in price[-5:]) / 5
     ma10 = sum(d["close"] for d in price[-10:]) / 10
     ma20 = sum(d["close"] for d in price[-20:]) / 20
 
-    # 📈 20日新高
-    high20 = max(d["close"] for d in price[-20:])
-
-    # 📊 RSI
     r = rsi(price)
 
-    # 🔥 爆量
-    vol5 = sum(d["Trading_Volume"] for d in price[-5:]) / 5
-
-    # 💥 漲幅
-    change = (close - price[-2]["close"]) / price[-2]["close"] * 100
-
-    # 🧠 K棒強度（避免長上影）
-    body = abs(close - open_p)
-    candle = high - low
-    strong_k = body / candle > 0.5 if candle != 0 else False
-
-    # 💰 法人（加強版）
     last3 = inst[-3:]
-
     foreign = sum(d["buy_sell"] for d in last3 if d["name"] == "Foreign_Investor")
-    trust = sum(d["buy_sell"] for d in last3 if d["name"] == "Investment_Trust")
-    dealer = sum(d["buy_sell"] for d in last3 if d["name"] == "Dealer")
 
-    # 🎯 條件
     return (
-        vol > vol5 * 2 and              # 爆量
-        close >= high20 and            # 突破
-        ma5 > ma10 > ma20 and          # 多頭排列
-        close > open_p and             # 紅K
-        r > 65 and                     # 強勢RSI
-        change > 4 and                 # 強勢漲幅
-        strong_k and                   # 不長上影
-        foreign > 0 and                # 外資最重要
-        (trust > 0 or dealer > 0)      # 至少一個跟
+        vol > vol5 * 2 and
+        close >= high20 and
+        ma5 > ma10 > ma20 and
+        r > 65 and
+        foreign > 0
+    )
+
+
+# ===== 空頭逆勢 =====
+def anti_fall(price, inst):
+    if len(price) < 30 or len(inst) < 10:
+        return False
+
+    t = price[-1]
+    close = t["close"]
+    prev = price[-2]["close"]
+
+    ma20 = sum(d["close"] for d in price[-20:]) / 20
+
+    last3 = inst[-3:]
+    foreign = sum(d["buy_sell"] for d in last3 if d["name"] == "Foreign_Investor")
+
+    change = (close - prev) / prev * 100
+
+    return (
+        close > ma20 and      # 抗跌
+        change > 2 and        # 逆勢上漲
+        foreign > 0           # 外資買
     )
 
 
 # ===== 掃描 =====
 def scan():
-    print("🚀 穩定版掃描中...")
+    print("🚀 掃描中...")
 
-    if not market_ok():
-        print("⚠️ 大盤不佳，跳過")
-        return
+    weak = not market_ok()
 
     for s in get_stocks():
 
@@ -146,29 +146,55 @@ def scan():
             price = get_price(s)
             inst = get_inst(s)
 
-            if is_strong(price, inst):
+            if weak:
+                if anti_fall(price, inst):
+                    msg = f"🛡️ 逆勢強股：{s}"
+                    send_line(msg)
+                    notified.add(s)
 
-                t = price[-1]
+            else:
+                if strong_stock(price, inst):
+                    msg = f"🔥 強勢飆股：{s}"
+                    send_line(msg)
+                    notified.add(s)
 
-                msg = f"""🔥 穩定強勢股：{s}
+        except:
+            continue
 
-📈 買點：突破 {t["max"]}
-🛑 停損：{t["min"]}
-💰 現價：{t["close"]}
 
-條件：爆量＋法人＋趨勢確認
+# ===== 中午報告 =====
+def daily_report():
+    global last_report_date
+
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+
+    if now.hour == 12 and last_report_date != today:
+
+        close, ma20, change = get_market()
+
+        if close > ma20:
+            trend = "📈 多頭"
+            action = "可積極找買點"
+        else:
+            trend = "📉 空頭"
+            action = "保守 / 找逆勢股"
+
+        msg = f"""📊 今日盤勢報告
+
+指數：{close:.0f}
+漲跌：{change:.2f}%
+
+趨勢：{trend}
+建議：{action}
 """
 
-                print(msg)
-                send_line(msg)
-
-                notified.add(s)
-
-        except Exception as e:
-            print("錯誤:", s, e)
+        send_line(msg)
+        last_report_date = today
 
 
 # ===== 主程式 =====
 while True:
     scan()
+    daily_report()
     time.sleep(600)
