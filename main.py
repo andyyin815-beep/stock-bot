@@ -1,26 +1,12 @@
 import requests
-import pandas as pd
 import numpy as np
-import time
 import joblib
-import warnings
-import os
+import time
 
-warnings.filterwarnings("ignore")
+# ===== LINE 設定 =====
+LINE_TOKEN = "ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU="
+USER_ID = "Ue4ac469ed010e1cebba684c8cb399ae5"
 
-# ===== LINE（用環境變數，安全）=====
-LINE_TOKEN = ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU=
-USER_ID = Ue4ac469ed010e1cebba684c8cb399ae5
-
-# ===== 載入AI模型 =====
-try:
-    model = joblib.load("model.pkl")
-    print("✅ AI模型載入成功")
-except:
-    model = None
-    print("⚠️ 沒有AI模型")
-
-# ===== LINE推播 =====
 def send_line(msg):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
@@ -31,84 +17,45 @@ def send_line(msg):
         "to": USER_ID,
         "messages": [{"type": "text", "text": msg}]
     }
+
     try:
         requests.post(url, headers=headers, json=payload, timeout=10)
     except Exception as e:
         print("LINE錯誤:", e)
 
-# ===== 抓股價（台股）=====
-def get_price(stock_id):
-    try:
-        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=5)
+# ===== 載入AI模型 =====
+model = joblib.load("model.pkl")
 
-        data = res.json()
+def predict(features):
+    weights = model["weights"]
+    threshold = model["threshold"]
 
-        if "msgArray" not in data or len(data["msgArray"]) == 0:
-            return None
+    score = sum(f*w for f, w in zip(features, weights))
+    return score
 
-        price = float(data["msgArray"][0]["z"])
-        return price
-
-    except:
-        return None
-
-# ===== 模擬技術指標（穩定版）=====
-def get_fake_indicator():
-    volume_ratio = np.random.uniform(1, 3)
-    rsi = np.random.uniform(40, 80)
-    macd = np.random.uniform(-1, 2)
-    return volume_ratio, rsi, macd
+# ===== 假資料（之後可接真API）=====
+def get_fake_data():
+    vol = np.random.rand()
+    foreign = np.random.rand()
+    main = np.random.rand()
+    return [vol, foreign, main]
 
 # ===== 主程式 =====
-def run():
-    print("🚀 開始掃描...")
+print("🚀 AI飆股獵人啟動")
 
-    # 測試幾檔股票
-    stock_list = ["2330", "2603", "2382", "3037", "2376"]
+while True:
+    try:
+        features = get_fake_data()
+        score = predict(features)
 
-    for stock_id in stock_list:
+        print("分數:", round(score, 3))
 
-        price = get_price(stock_id)
-        if not price:
-            continue
-
-        # 技術指標（目前用穩定版）
-        volume_ratio, rsi, macd = get_fake_indicator()
-
-        # ===== AI勝率 =====
-        ai_score = 0
-
-        if model:
-            try:
-                features = np.array([[volume_ratio, rsi, macd]])
-                ai_score = model.predict_proba(features)[0][1]
-            except:
-                ai_score = 0
-
-        # ===== 篩選條件（簡單版）=====
-        if volume_ratio > 1.5 and rsi > 50:
-
-            msg = f"""🚀 主升段飆股
-
-股票: {stock_id}
-價格: {price}
-
-📊 RSI: {rsi:.2f}
-📊 MACD: {macd:.2f}
-📊 量比: {volume_ratio:.2f}
-
-🔥 AI勝率: {ai_score:.2%}
-"""
-
-            print(msg)
+        if score > 0.65:
+            msg = f"🔥 AI抓到飆股機會！\n分數: {round(score,3)}"
             send_line(msg)
 
-            time.sleep(1)
+        time.sleep(10)
 
-# ===== 主迴圈 =====
-if __name__ == "__main__":
-    while True:
-        run()
-        time.sleep(60)
+    except Exception as e:
+        print("錯誤:", e)
+        time.sleep(10)
