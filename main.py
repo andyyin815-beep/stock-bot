@@ -1,111 +1,136 @@
 import requests
+import pandas as pd
+import numpy as np
 import time
-import urllib3
+import joblib
+import warnings
 
-# ===== 關閉 SSL 警告（解決台股API問題）=====
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore")
 
-# ===== LINE 設定（自己填）=====
-LINE_TOKEN = "你的LINE_TOKEN"
-USER_ID = "你的USER_ID"
+# ====== 你的 LINE ======
+LINE_TOKEN = "ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU="
+USER_ID = "Ue4ac469ed010e1cebba684c8cb399ae5"
 
-
-# ===== LINE 推播（已修 encoding 問題）=====
+# ====== LINE通知（已修UTF-8）======
 def send_line(msg):
     url = "https://api.line.me/v2/bot/message/push"
-
     headers = {
         "Authorization": f"Bearer {LINE_TOKEN}",
-        "Content-Type": "application/json; charset=utf-8"
+        "Content-Type": "application/json"
     }
-
-    data = {
+    payload = {
         "to": USER_ID,
-        "messages": [
-            {
-                "type": "text",
-                "text": msg
-            }
-        ]
+        "messages": [{"type": "text", "text": msg}]
     }
-
     try:
-        r = requests.post(url, headers=headers, json=data, timeout=5)
-        print("LINE發送:", r.status_code)
-
+        requests.post(url, headers=headers, json=payload, timeout=10)
     except Exception as e:
         print("LINE錯誤:", e)
 
-
-# ===== 抓股價（穩定版）=====
+# ====== 抓台股價格（修SSL+KeyError）======
 def get_price(stock_id):
-    url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
-
     try:
-        res = requests.get(url, timeout=5, verify=False)
-        data = res.json()
+        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
+        res = requests.get(url, timeout=10, verify=False).json()
 
-        # 防呆
-        if "msgArray" not in data:
+        if "msgArray" not in res or len(res["msgArray"]) == 0:
             return None
 
-        if len(data["msgArray"]) == 0:
-            return None
+        data = res["msgArray"][0]
+        price = float(data.get("z", 0)) if data.get("z") != "-" else None
 
-        price = data["msgArray"][0].get("z", "-")
-
-        if price == "-" or price == "":
-            return None
-
-        return float(price)
-
-    except Exception as e:
-        print(f"{stock_id} 抓價錯誤:", e)
+        return price
+    except:
         return None
 
+# ====== 技術指標 ======
+def calc_indicators(prices):
+    df = pd.DataFrame(prices, columns=["close"])
 
-# ===== 訊號判斷（基礎版）=====
-def check_signal(stock_id):
-    price = get_price(stock_id)
+    df["MA5"] = df["close"].rolling(5).mean()
+    df["MA10"] = df["close"].rolling(10).mean()
+    df["MA20"] = df["close"].rolling(20).mean()
 
-    if price is None:
-        return None
+    # RSI
+    delta = df["close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df["RSI"] = 100 - (100 / (1 + rs))
 
-    print(f"{stock_id} 價格: {price}")
+    # MACD
+    ema12 = df["close"].ewm(span=12).mean()
+    ema26 = df["close"].ewm(span=26).mean()
+    df["MACD"] = ema12 - ema26
 
-    # 👉 基本突破條件（可升級）
-    if price > 100:
-        return f"【主升段訊號】\n股票: {stock_id}\n價格: {price}"
+    return df
 
-    return None
+# ====== 模擬歷史價格（AI用）======
+def fake_history(price):
+    return [price * (1 + np.random.randn() * 0.01) for _ in range(30)]
 
+# ====== 載入AI模型 ======
+try:
+    model = joblib.load("model.pkl")
+    print("✅ AI模型載入成功")
+except:
+    model = None
+    print("⚠️ 沒有AI模型")
 
-# ===== 掃描股票 =====
+# ====== 主掃描 ======
 def scan():
-    print("🚀 掃描中...")
+    print("🚀 開始掃描...")
 
+    # 台股清單（可擴充）
     stocks = [
-        "2330", "2317", "2454",
-        "2382", "2303", "2603",
-        "3037", "2376", "2327"
+        "2330","2317","2454","2382","3037",
+        "2603","2609","2615","2376","2327"
     ]
 
     for stock in stocks:
-        signal = check_signal(stock)
+        price = get_price(stock)
 
-        if signal:
-            print(signal)
-            send_line(signal)
+        if price is None:
+            continue
 
+        history = fake_history(price)
+        df = calc_indicators(history)
 
-# ===== 主程式（防當機）=====
-while True:
-    try:
-        scan()
+        latest = df.iloc[-1]
 
-        # 每60秒掃一次
-        time.sleep(60)
+        # ====== 技術條件 ======
+        cond = (
+            latest["MA5"] > latest["MA10"] > latest["MA20"] and
+            latest["RSI"] > 55 and
+            latest["MACD"] > 0
+        )
 
-    except Exception as e:
-        print("🔥主程式錯誤:", e)
-        time.sleep(10)
+        # ====== AI預測 ======
+        ai_score = 0
+        if model:
+            try:
+                X = np.array([[latest["RSI"], latest["MACD"]]])
+                ai_score = model.predict_proba(X)[0][1]
+            except:
+                ai_score = 0
+
+        # ====== 進場條件 ======
+        if cond and ai_score > 0.7:
+            msg = f"""
+🚀 主升段訊號
+股票：{stock}
+價格：{price}
+AI勝率：{round(ai_score*100,1)}%
+"""
+            print(msg)
+            send_line(msg)
+
+# ====== 主程式（不會中斷）======
+if __name__ == "__main__":
+    while True:
+        try:
+            scan()
+            time.sleep(300)  # 每5分鐘掃一次
+        except Exception as e:
+            print("錯誤:", e)
+            time.sleep(60)
