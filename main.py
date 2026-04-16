@@ -6,8 +6,6 @@ TOKEN = "你的TOKEN".strip()
 USER_ID = "你的USER_ID".strip()
 
 notified = set()
-last_report_date = ""
-
 
 # ===== LINE =====
 def send_line(msg):
@@ -21,9 +19,24 @@ def send_line(msg):
             "to": USER_ID,
             "messages": [{"type": "text", "text": msg}]
         }
-        requests.post(url, headers=headers, json=data, timeout=10)
-    except Exception as e:
-        print("LINE錯誤:", e)
+        requests.post(url, headers=headers, json=data)
+    except:
+        pass
+
+
+# ===== 族群（可自己擴充）=====
+SECTORS = {
+    "AI": ["2330","2382","2308","6669","3231"],
+    "軍工": ["4576","8033","2634"],
+    "電子": ["2317","2454","2303","2324"]
+}
+
+
+def get_sector(stock_id):
+    for k, v in SECTORS.items():
+        if stock_id in v:
+            return k
+    return "其他"
 
 
 # ===== RSI =====
@@ -43,29 +56,7 @@ def rsi(data, period=14):
     return 100 - (100 / (1 + rs))
 
 
-# ===== 大盤 =====
-def get_market():
-    try:
-        url = "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=TAIEX"
-        data = requests.get(url).json()["data"]
-
-        close = data[-1]["close"]
-        prev = data[-2]["close"]
-        ma20 = sum(d["close"] for d in data[-20:]) / 20
-
-        change = (close - prev) / prev * 100
-
-        return close, ma20, change
-    except:
-        return 0, 0, 0
-
-
-def market_ok():
-    close, ma20, _ = get_market()
-    return close > ma20
-
-
-# ===== 股票 =====
+# ===== 資料 =====
 def get_stocks():
     data = requests.get("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo").json()["data"]
     return [d["stock_id"] for d in data][:150]
@@ -79,63 +70,50 @@ def get_inst(s):
     return requests.get(f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={s}").json().get("data", [])
 
 
-# ===== 多頭策略 =====
-def strong_stock(price, inst):
+# ===== 🎯 主升段評分 =====
+def score_stock(price, inst):
+
     if len(price) < 30 or len(inst) < 10:
-        return False
+        return 0
 
     t = price[-1]
+
     close = t["close"]
-    high20 = max(d["close"] for d in price[-20:])
+    prev = price[-2]["close"]
     vol = t["Trading_Volume"]
-    vol5 = sum(d["Trading_Volume"] for d in price[-5:]) / 5
 
     ma5 = sum(d["close"] for d in price[-5:]) / 5
     ma10 = sum(d["close"] for d in price[-10:]) / 10
     ma20 = sum(d["close"] for d in price[-20:]) / 20
+
+    vol5 = sum(d["Trading_Volume"] for d in price[-5:]) / 5
 
     r = rsi(price)
 
     last3 = inst[-3:]
     foreign = sum(d["buy_sell"] for d in last3 if d["name"] == "Foreign_Investor")
 
-    return (
-        vol > vol5 * 2 and
-        close >= high20 and
-        ma5 > ma10 > ma20 and
-        r > 65 and
-        foreign > 0
-    )
-
-
-# ===== 空頭逆勢 =====
-def anti_fall(price, inst):
-    if len(price) < 30 or len(inst) < 10:
-        return False
-
-    t = price[-1]
-    close = t["close"]
-    prev = price[-2]["close"]
-
-    ma20 = sum(d["close"] for d in price[-20:]) / 20
-
-    last3 = inst[-3:]
-    foreign = sum(d["buy_sell"] for d in last3 if d["name"] == "Foreign_Investor")
-
     change = (close - prev) / prev * 100
 
-    return (
-        close > ma20 and      # 抗跌
-        change > 2 and        # 逆勢上漲
-        foreign > 0           # 外資買
-    )
+    score = 0
+
+    # 📈 主升段條件
+    if close > ma20: score += 2
+    if ma5 > ma10 > ma20: score += 2
+    if vol > vol5 * 1.8: score += 2
+    if r > 60: score += 1
+    if change > 3: score += 1
+    if foreign > 0: score += 2
+
+    return score
 
 
 # ===== 掃描 =====
 def scan():
-    print("🚀 掃描中...")
 
-    weak = not market_ok()
+    print("🚀 主升段掃描中...")
+
+    candidates = []
 
     for s in get_stocks():
 
@@ -146,55 +124,39 @@ def scan():
             price = get_price(s)
             inst = get_inst(s)
 
-            if weak:
-                if anti_fall(price, inst):
-                    msg = f"🛡️ 逆勢強股：{s}"
-                    send_line(msg)
-                    notified.add(s)
+            score = score_stock(price, inst)
 
-            else:
-                if strong_stock(price, inst):
-                    msg = f"🔥 強勢飆股：{s}"
-                    send_line(msg)
-                    notified.add(s)
+            if score >= 6:  # 🔥 門檻（可調）
+                candidates.append((s, score, price[-1]["close"]))
 
         except:
             continue
 
+    # ===== 排名 =====
+    candidates.sort(key=lambda x: x[1], reverse=True)
 
-# ===== 中午報告 =====
-def daily_report():
-    global last_report_date
+    top = candidates[:5]  # 🔥 只取前5名
 
-    now = datetime.now()
-    today = now.strftime("%Y-%m-%d")
+    for s, score, price in top:
 
-    if now.hour == 12 and last_report_date != today:
+        sector = get_sector(s)
 
-        close, ma20, change = get_market()
+        msg = f"""🔥 主升段強股：{s}
 
-        if close > ma20:
-            trend = "📈 多頭"
-            action = "可積極找買點"
-        else:
-            trend = "📉 空頭"
-            action = "保守 / 找逆勢股"
+🏆 分數：{score}/10
+📊 族群：{sector}
+💰 現價：{price}
 
-        msg = f"""📊 今日盤勢報告
-
-指數：{close:.0f}
-漲跌：{change:.2f}%
-
-趨勢：{trend}
-建議：{action}
+策略：主升段起漲
 """
 
+        print(msg)
         send_line(msg)
-        last_report_date = today
+
+        notified.add(s)
 
 
 # ===== 主程式 =====
 while True:
     scan()
-    daily_report()
     time.sleep(600)
