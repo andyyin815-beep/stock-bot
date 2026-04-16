@@ -9,8 +9,8 @@ import os
 warnings.filterwarnings("ignore")
 
 # ===== LINE（用環境變數，安全）=====
-LINE_TOKEN = os.getenv("LINE_TOKEN")
-USER_ID = os.getenv("USER_ID")
+LINE_TOKEN = ZMvaknwB2/EU4PPjVhls/DCb8dITxVZjDLtbArfPVskXt6unAXNSpQOc1Rv7V/C7rc5QHaOW7lzKSPsBH4t730 tFj6492Gea9+caOScXpU1eHUHrJOa4tcbWdhlJ8l06PEpY1Y71xcI0oYZBeRqk5QdB04t89/1O/w1cDnyilFU=
+USER_ID = Ue4ac469ed010e1cebba684c8cb399ae5
 
 # ===== 載入AI模型 =====
 try:
