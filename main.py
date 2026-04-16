@@ -1,11 +1,17 @@
 import requests
 import pandas as pd
 import time
+import urllib3
 
-# ===== LINE 推播 =====
-LINE_TOKEN = "你的TOKEN"
+# 關閉 SSL 警告（解決 TWSE 問題）
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ===== LINE 設定 =====
+LINE_TOKEN = "你的LINE_TOKEN"
 USER_ID = "你的USER_ID"
 
+
+# ===== LINE 推播 =====
 def send_line(msg):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
@@ -16,21 +22,23 @@ def send_line(msg):
         "to": USER_ID,
         "messages": [{"type": "text", "text": msg}]
     }
+
     try:
-        requests.post(url, headers=headers, json=data)
-    except:
-        print("LINE 發送失敗")
+        r = requests.post(url, headers=headers, json=data, timeout=5)
+        print("LINE發送:", r.status_code)
+    except Exception as e:
+        print("LINE錯誤:", e)
 
 
-# ===== 安全抓價格 =====
+# ===== 抓股價（穩定版）=====
 def get_price(stock_id):
     url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{stock_id}.tw"
 
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, timeout=5, verify=False)
         data = res.json()
 
-        # 🔥 重點：防呆
+        # 防呆
         if "msgArray" not in data:
             print(f"{stock_id} 無資料")
             return None
@@ -47,43 +55,51 @@ def get_price(stock_id):
         return float(price)
 
     except Exception as e:
-        print("抓價錯誤:", e)
+        print(f"{stock_id} 抓價錯誤:", e)
         return None
 
 
-# ===== 簡單AI條件（你後面再升級）=====
-def check_signal(stock_id):
-    price = get_price(stock_id)
-
-    if price is None:
-        return None
-
-    # 👉 範例條件（你之後會用AI取代）
+# ===== 技術指標（簡化版）=====
+def calc_signal(price):
+    # 先用簡單條件（後面可升級AI）
     if price > 100:
-        return f"🚀 {stock_id} 突破訊號！價格：{price}"
+        return True
+    return False
 
-    return None
 
-
-# ===== 主掃描 =====
+# ===== 掃描股票 =====
 def scan():
-    stocks = ["2330", "2317", "2454", "2603", "2382"]
-
     print("🚀 掃描中...")
 
-    for s in stocks:
-        signal = check_signal(s)
-        if signal:
-            print(signal)
-            send_line(signal)
+    # 👉 可自己擴充
+    stocks = [
+        "2330", "2317", "2454",
+        "2382", "2303", "2603",
+        "3037", "2376", "2327"
+    ]
+
+    for stock in stocks:
+        price = get_price(stock)
+
+        if price is None:
+            continue
+
+        print(f"{stock} 價格: {price}")
+
+        if calc_signal(price):
+            msg = f"🚀【主升段訊號】\n股票: {stock}\n價格: {price}"
+            print(msg)
+            send_line(msg)
 
 
-# ===== 主程式（防當機版）=====
+# ===== 主程式（永不當機版）=====
 while True:
     try:
         scan()
+
+        # 每60秒掃一次
         time.sleep(60)
 
     except Exception as e:
-        print("主程式錯誤:", e)
+        print("🔥主程式錯誤:", e)
         time.sleep(10)
