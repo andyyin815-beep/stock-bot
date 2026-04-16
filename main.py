@@ -4,8 +4,9 @@ import tensorflow as tf
 from tensorflow.keras import layers
 from xgboost import XGBClassifier
 import time
+from datetime import datetime
 
-# ===== LINE設定 =====
+# ===== LINE =====
 TOKEN = "你的TOKEN".strip()
 USER_ID = "你的USER_ID".strip()
 
@@ -23,7 +24,7 @@ def send_line(msg):
         pass
 
 
-# ===== 股票資料 =====
+# ===== 股票 =====
 def get_stocks():
     data = requests.get(
         "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo"
@@ -61,10 +62,8 @@ def build_data(price):
 
     for i in range(30, len(closes)-5):
 
-        # LSTM
         seq = closes[i-30:i]
 
-        # XGB特徵
         ma5 = np.mean(closes[i-5:i])
         ma20 = np.mean(closes[i-20:i])
         vol5 = np.mean(vols[i-5:i])
@@ -86,7 +85,7 @@ def build_data(price):
     return np.array(X_lstm), np.array(X_xgb), np.array(y)
 
 
-# ===== LSTM模型 =====
+# ===== 模型 =====
 def build_lstm():
     model = tf.keras.Sequential([
         layers.LSTM(64, input_shape=(30,1)),
@@ -96,7 +95,7 @@ def build_lstm():
     return model
 
 
-# ===== 訓練模型 =====
+# ===== 訓練 =====
 def train_models():
     print("🧠 訓練模型中...")
 
@@ -189,11 +188,9 @@ def scan(lstm, xgb):
         closes = [d["close"] for d in price]
         vols = [d["Trading_Volume"] for d in price]
 
-        # LSTM
         seq = np.array(closes[-30:]).reshape(1,30,1)
         p1 = lstm.predict(seq, verbose=0)[0][0]
 
-        # XGB
         ma5 = np.mean(closes[-5:])
         ma20 = np.mean(closes[-20:])
         vol5 = np.mean(vols[-5:])
@@ -219,10 +216,64 @@ def scan(lstm, xgb):
             send_line(msg)
 
 
+# ===== 大盤資訊 =====
+def get_market_info():
+    try:
+        data = requests.get(
+            "https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=TAIEX"
+        ).json()["data"]
+
+        close = data[-1]["close"]
+        prev = data[-2]["close"]
+        ma20 = sum(d["close"] for d in data[-20:]) / 20
+
+        change = (close - prev) / prev * 100
+
+        return close, change, ma20
+    except:
+        return 0, 0, 0
+
+
+# ===== 固定時間報告 =====
+last_report = {"morning": "", "noon": "", "close": ""}
+
+def daily_report():
+    global last_report
+
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+
+    close, change, ma20 = get_market_info()
+
+    if now.hour == 9 and last_report["morning"] != today:
+        trend = "📈 多頭" if close > ma20 else "📉 偏弱"
+        send_line(f"""🕘 開盤前觀察
+指數：{close:.0f}
+漲跌：{change:.2f}%
+趨勢：{trend}
+""")
+        last_report["morning"] = today
+
+    if now.hour == 12 and last_report["noon"] != today:
+        send_line(f"""🕛 盤中分析
+指數：{close:.0f}
+漲跌：{change:.2f}%
+""")
+        last_report["noon"] = today
+
+    if now.hour == 13 and now.minute >= 30 and last_report["close"] != today:
+        send_line(f"""🕐 收盤總結
+指數：{close:.0f}
+漲跌：{change:.2f}%
+""")
+        last_report["close"] = today
+
+
 # ===== 主程式 =====
 lstm, xgb = train_models()
 backtest(lstm, xgb)
 
 while True:
     scan(lstm, xgb)
+    daily_report()
     time.sleep(600)
